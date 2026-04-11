@@ -15,7 +15,7 @@ public class StudentLoginManager : MonoBehaviour
     public Button loginButton;
     public TMP_Text feedbackText;
 
-    public string hubSceneName = "HubScene";
+    public string hubSceneName = "HubSelectionScene";
 
     [Header("API Settings")]
     public string apiBaseUrl = "http://localhost:3000";
