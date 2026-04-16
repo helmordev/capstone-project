@@ -15,8 +15,11 @@ public class HubSelectionManager : MonoBehaviour
     public TMP_Text feedbackText;
 
     [Header("Network Settings")]
-    public string apiBaseUrl = "http://YOUR_SERVER_URL";
-    public string nextSceneName = "GameplayScene"; 
+    public string apiBaseUrl = "http://localhost:8000";
+    public string nextSceneName = "GameplayScene";
+
+    private Coroutine feedbackHideCoroutine;
+    private bool isJoining;
 
     void Start()
     {
@@ -25,6 +28,11 @@ public class HubSelectionManager : MonoBehaviour
 
     public void OnJoinButtonClicked()
     {
+        if (isJoining)
+        {
+            return;
+        }
+
         string enteredCode = codeInput.text.Trim(); // .Trim() removes accidental spaces
 
         if (string.IsNullOrEmpty(enteredCode))
@@ -33,7 +41,7 @@ public class HubSelectionManager : MonoBehaviour
             return;
         }
 
-        joinButton.interactable = false;
+        SetJoinInProgress(true);
         ShowFeedback("Verifying code...", Color.yellow, false);
 
         StartCoroutine(JoinHubRoutine(enteredCode));
@@ -42,68 +50,95 @@ public class HubSelectionManager : MonoBehaviour
     IEnumerator JoinHubRoutine(string code)
     {
         string accessToken = PlayerPrefs.GetString("AccessToken", "");
-        
+
         if (string.IsNullOrEmpty(accessToken))
         {
             ShowFeedback("Error: You are not logged in. Please restart.", Color.red, false);
+            SetJoinInProgress(false);
             yield break;
         }
 
-        // Prepare the JSON request with the typed code
-        HubJoinRequest requestData = new HubJoinRequest { code = code };
+        StudentJoinRoomRequest requestData = new StudentJoinRoomRequest { room_code = code };
         string jsonData = JsonUtility.ToJson(requestData);
 
-        string joinEndpoint = apiBaseUrl + "/api/v1/hubs/join";
+        string joinEndpoint = apiBaseUrl + "/api/v1/student/join-room";
         UnityWebRequest request = new UnityWebRequest(joinEndpoint, "POST");
-        
+
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
         request.uploadHandler = new UploadHandlerRaw(bodyRaw);
         request.downloadHandler = new DownloadHandlerBuffer();
-        
+
         request.SetRequestHeader("Content-Type", "application/json");
-        request.SetRequestHeader("Authorization", "Bearer " + accessToken); //
+        request.SetRequestHeader("Accept", "application/json");
+        request.SetRequestHeader("Authorization", "Bearer " + accessToken);
 
         yield return request.SendWebRequest();
 
-        joinButton.interactable = true;
+        SetJoinInProgress(false);
 
-        if (request.result == UnityWebRequest.Result.ConnectionError)
+        if (request.result == UnityWebRequest.Result.ConnectionError || request.result == UnityWebRequest.Result.DataProcessingError)
         {
             ShowFeedback("Network error. Could not reach server.", Color.red, true);
+            yield break;
         }
-        else
-        {
-            HubJoinResponse response = JsonUtility.FromJson<HubJoinResponse>(request.downloadHandler.text);
 
-            if (response != null && response.success)
+        if (request.responseCode >= 200 && request.responseCode < 300)
+        {
+            StudentJoinRoomSuccessResponse response = JsonUtility.FromJson<StudentJoinRoomSuccessResponse>(request.downloadHandler.text);
+
+            if (response != null && HasValidClassroom(response.classroom))
             {
-                ShowFeedback("Successfully joined Hub!", Color.green, false);
+                ShowFeedback(BuildSuccessMessage(response.message), Color.green, false);
+                PlayerPrefs.SetString("ClassroomId", response.classroom.id ?? string.Empty);
+                PlayerPrefs.SetString("ClassroomName", response.classroom.name ?? string.Empty);
+                PlayerPrefs.SetInt("ClassroomGrade", response.classroom.grade);
+                PlayerPrefs.SetString("ClassroomSection", response.classroom.section ?? string.Empty);
+                PlayerPrefs.SetString("ClassroomRoomCode", response.classroom.room_code ?? string.Empty);
+                PlayerPrefs.Save();
+
                 yield return new WaitForSeconds(1f);
                 SceneManager.LoadScene(nextSceneName);
+                yield break;
             }
-            else if (response != null && response.error != null)
+
+            ShowFeedback("An unknown error occurred.", Color.red, true);
+            yield break;
+        }
+
+        string errorMessage = ExtractMessage(request.downloadHandler.text, "Failed to join room.");
+        ShowFeedback(errorMessage, Color.red, true);
+    }
+
+    private void SetJoinInProgress(bool inProgress)
+    {
+        isJoining = inProgress;
+
+        if (joinButton != null)
+        {
+            joinButton.interactable = !inProgress;
+        }
+    }
+
+    private static bool HasValidClassroom(StudentClassroom classroom)
+    {
+        return classroom != null && !string.IsNullOrEmpty(classroom.id);
+    }
+
+    private static string BuildSuccessMessage(string serverMessage)
+    {
+        if (!string.IsNullOrEmpty(serverMessage))
+        {
+            string trimmedMessage = serverMessage.Trim();
+
+            if (trimmedMessage.IndexOf("already", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                trimmedMessage.IndexOf("success", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                trimmedMessage.IndexOf("joined", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                // Handle specific API errors like invalid codes
-                if (response.error.code == "CODE_INVALID_OR_EXPIRED" || response.error.code == "HUB_NOT_FOUND")
-                {
-                    ShowFeedback("Invalid or expired code. Please try again.", Color.red, true);
-                }
-                else if (response.error.code == "HUB_ALREADY_MEMBER" || response.error.code == "HUB_STUDENT_ALREADY_IN_HUB")
-                {
-                    ShowFeedback("You are already in a hub! Loading game...", Color.green, false);
-                    yield return new WaitForSeconds(1f);
-                    SceneManager.LoadScene(nextSceneName);
-                }
-                else
-                {
-                    ShowFeedback(response.error.message, Color.red, true);
-                }
-            }
-            else
-            {
-                ShowFeedback("An unknown error occurred.", Color.red, true);
+                return trimmedMessage;
             }
         }
+
+        return "Joined room successfully.";
     }
 
     private void ShowFeedback(string message, Color color, bool autoHide)
@@ -112,10 +147,15 @@ public class HubSelectionManager : MonoBehaviour
         feedbackText.color = color;
         feedbackText.gameObject.SetActive(true);
 
+        if (feedbackHideCoroutine != null)
+        {
+            StopCoroutine(feedbackHideCoroutine);
+            feedbackHideCoroutine = null;
+        }
+
         if (autoHide)
         {
-            StopAllCoroutines(); 
-            StartCoroutine(HideFeedbackAfterDelay(3f));
+            feedbackHideCoroutine = StartCoroutine(HideFeedbackAfterDelay(3f));
         }
     }
 
@@ -123,26 +163,46 @@ public class HubSelectionManager : MonoBehaviour
     {
         yield return new WaitForSeconds(delay);
         feedbackText.gameObject.SetActive(false);
+        feedbackHideCoroutine = null;
+    }
+
+    private static string ExtractMessage(string rawJson, string fallbackMessage)
+    {
+        if (string.IsNullOrEmpty(rawJson))
+        {
+            return fallbackMessage;
+        }
+
+        StudentApiMessageResponse response = JsonUtility.FromJson<StudentApiMessageResponse>(rawJson);
+        if (response != null && !string.IsNullOrEmpty(response.message))
+        {
+            return response.message;
+        }
+
+        return fallbackMessage;
     }
 }
 
 // --- JSON Data Structures ---
 [Serializable]
-public class HubJoinRequest { public string code; }
-
-[Serializable]
-public class HubJoinResponse
+public class StudentJoinRoomRequest
 {
-    public bool success;
-    public HubJoinData data;
-    public AuthError error; 
+    public string room_code;
 }
 
 [Serializable]
-public class HubJoinData
+public class StudentJoinRoomSuccessResponse
+{
+    public string message;
+    public StudentClassroom classroom;
+}
+
+[Serializable]
+public class StudentClassroom
 {
     public string id;
-    public string hubId;
-    public string studentId;
-    public string joinedAt;
+    public string name;
+    public int grade;
+    public string section;
+    public string room_code;
 }
