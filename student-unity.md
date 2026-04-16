@@ -1,252 +1,561 @@
-# Student (Unity) API Endpoints
+# Student API for Unity Client
 
-## Scope
+## Overview
 
-This document covers **only the endpoints currently implemented in source** for the Unity student client.
+This document describes the current student-facing API contract implemented by the Laravel backend.
 
-- Included: current student auth and hub-join flows
-- Excluded: planned challenge, progress, gamification, dashboard, SSE, and production websocket APIs that are mentioned in `.planning/` but are **not mounted yet**
+Base URL example:
 
-## Authentication
-
-Student routes use the custom JWT flow, not Better Auth.
-
-1. Call `POST /api/v1/students/auth/login`
-2. Store the returned `accessToken` and `refreshToken`
-3. Send `Authorization: Bearer <accessToken>` on protected student routes
-4. Refresh with `POST /api/v1/students/auth/refresh` when the access token expires
-
-### Token lifecycle
-
-- Access token TTL: **900 seconds (15 minutes)**
-- Refresh token TTL: **604800 seconds (7 days)**
-- Login lockout: after **5 failed login attempts**, the student is locked for **15 minutes**
-
-## Response envelope
-
-### Success
-
-```json
-{
-  "success": true,
-  "data": {}
-}
+```text
+http://localhost:8000
 ```
 
-### Error
+All student API routes are under `/api/v1`.
 
-```json
-{
-  "success": false,
-  "error": {
-    "code": "AUTH_INVALID_TOKEN",
-    "message": "Invalid or expired token"
-  }
-}
+## Authentication Model
+
+- Student login returns a Sanctum bearer token.
+- Send that token on protected requests using:
+
+```http
+Authorization: Bearer <token>
+Accept: application/json
 ```
 
-> Date fields are serialized as ISO strings in JSON responses.
+- There is no refresh-token flow right now.
+- Log out by calling the logout endpoint with the current bearer token.
 
-## Endpoint summary
+## Endpoints
 
-| Method | Path | Auth | Purpose |
-| --- | --- | --- | --- |
-| POST | `/api/v1/students/auth/login` | None | Sign in a student with `studentId` + 6-digit PIN |
-| POST | `/api/v1/students/auth/refresh` | None | Exchange a refresh token for a new access token pair |
-| POST | `/api/v1/students/auth/logout` | Student bearer token | Revoke the current access token and clear refresh tokens |
-| POST | `/api/v1/hubs/join` | Student bearer token | Join a hub using a 6-character server code |
+### 1. Student Login
 
----
+`POST /api/v1/auth/login`
 
-## 1) POST /api/v1/students/auth/login
+Use the student LRN and 6-digit PIN from the teacher-issued credential slip.
 
-Sign in a student with their school-issued `studentId` and 6-digit PIN.
-
-### Request
+Request body:
 
 ```json
 {
-  "studentId": "2024-0001",
+  "lrn": "123456789012",
   "pin": "123456"
 }
 ```
 
-### Success response
+Validation rules:
+
+- `lrn`: required, string, exactly 12 characters
+- `pin`: required, string, exactly 6 characters
+
+Success response `200 OK`:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "accessToken": "<jwt-access-token>",
-    "refreshToken": "<jwt-refresh-token>",
-    "expiresIn": 900
+  "message": "Login successful.",
+  "token": "1|sanctum-token-value",
+  "student": {
+    "id": "2d80f4ef-4ad1-4f56-a0af-2c0329082d37",
+    "full_name": "Juan Dela Cruz",
+    "grade": 5,
+    "section": "A",
+    "must_change_password": true
   }
 }
 ```
 
-### Common errors
+Failure responses:
 
-- `AUTH_INVALID_CREDENTIALS` - bad `studentId` or PIN
-- `AUTH_ACCOUNT_LOCKED` - too many failed login attempts; current lockout window is 15 minutes
-
-### Unity notes
-
-- Keep `refreshToken` in secure storage
-- Use `expiresIn` to schedule token refresh before protected requests fail
-
----
-
-## 2) POST /api/v1/students/auth/refresh
-
-Refresh an expired or soon-to-expire access token.
-
-### Request
+- `401 Unauthorized`
 
 ```json
 {
-  "refreshToken": "<jwt-refresh-token>"
+  "message": "The provided credentials are incorrect."
 }
 ```
 
-### Success response
+- `403 Forbidden`
 
 ```json
 {
-  "success": true,
-  "data": {
-    "accessToken": "<new-jwt-access-token>",
-    "refreshToken": "<new-jwt-refresh-token>",
-    "expiresIn": 900
+  "message": "This account has been deactivated."
+}
+```
+
+- `422 Unprocessable Entity`
+
+```json
+{
+  "message": "The lrn field is required. (example)",
+  "errors": {
+    "lrn": [
+      "The lrn field is required."
+    ]
   }
 }
 ```
 
-### Common errors
+Unity notes:
 
-- `AUTH_INVALID_TOKEN` - refresh token is invalid, expired, or revoked
+- Save `token` securely after login.
+- Save `student.id`, `grade`, and `section` locally if you need quick profile access.
+- `must_change_password` is included in the payload even though the current student mobile API does not expose a password-change endpoint yet.
 
-### Unity notes
+### 2. Current Authenticated User
 
-- Replace both tokens after a successful refresh
-- If refresh fails, force the player back to login
+`GET /api/v1/user`
 
----
-
-## 3) POST /api/v1/students/auth/logout
-
-Log out the current student session.
-
-### Headers
+Headers:
 
 ```http
-Authorization: Bearer <accessToken>
+Authorization: Bearer <token>
+Accept: application/json
 ```
 
-### Success response
+Success response `200 OK`:
+
+Returns the authenticated user model as JSON.
+
+Example:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "message": "Logged out successfully"
-  }
+  "id": "2d80f4ef-4ad1-4f56-a0af-2c0329082d37",
+  "role": "student",
+  "full_name": "Juan Dela Cruz",
+  "username": "juan5a",
+  "grade": 5,
+  "section": "A",
+  "teacher_id": "33f1db6e-f947-423a-8af7-bff3b16d3170",
+  "classroom_id": null,
+  "is_active": true,
+  "must_change_password": true,
+  "created_at": "2026-04-16T10:00:00.000000Z",
+  "updated_at": "2026-04-16T10:00:00.000000Z"
 }
 ```
 
-### Common errors
+Failure response:
 
-- `AUTH_REQUIRED` - bearer token missing
-- `AUTH_INVALID_TOKEN` - token invalid or expired
-- `AUTH_TOKEN_REVOKED` - token was already revoked
+- `401 Unauthorized` when token is missing or invalid.
 
-### Behavior note
+### 3. Student Logout
 
-Logout does two things in current source:
+`POST /api/v1/auth/logout`
 
-- blocklists the current access token for its remaining TTL
-- deletes all stored refresh tokens for the student
-
----
-
-## 4) POST /api/v1/hubs/join
-
-Join a hub with a server code generated by a teacher/admin.
-
-### Headers
+Headers:
 
 ```http
-Authorization: Bearer <accessToken>
+Authorization: Bearer <token>
+Accept: application/json
 ```
 
-### Request
+Success response `200 OK`:
 
 ```json
 {
-  "code": "AB12CD"
+  "message": "Logged out successfully."
 }
 ```
 
-The server normalizes the code to uppercase.
+Failure response:
 
-### Success response
+- `401 Unauthorized` when token is missing or invalid.
+
+Unity notes:
+
+- After a successful logout, discard the stored token.
+
+### 4. Get Student Worlds
+
+`GET /api/v1/student/worlds`
+
+Headers:
+
+```http
+Authorization: Bearer <student-token>
+Accept: application/json
+```
+
+Rules:
+
+- Requires a valid Sanctum token.
+- Requires the authenticated user role to be `student`.
+- Returns only the subjects for the authenticated student's grade.
+
+Success response `200 OK`:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "9b2d8423-4edf-4a63-b0d8-5c23d6e6e2ef",
-    "hubId": "beff8a8f-48d8-4b66-a946-1adbb86d4b2c",
-    "studentId": "6e46b1a3-7d6a-48eb-b7c7-bb9ef0d81cb3",
-    "joinedAt": "2026-04-11T10:15:30.000Z"
+  "data": [
+    {
+      "id": "1aab2cc3-dd44-55ee-66ff-778899001122",
+      "name": "English",
+      "grade": 5,
+      "world_theme": "Language Galaxy",
+      "color_hex": "#3B82F6",
+      "difficulty": "standard",
+      "quarters": [
+        {
+          "id": "quarter-uuid",
+          "quarter_number": 1,
+          "current_unlock_week": 2,
+          "is_globally_unlocked": false,
+          "levels": [
+            {
+              "id": "level-uuid",
+              "level_number": 1,
+              "title": "Level 1",
+              "unlock_week": 1,
+              "is_unlocked": true
+            },
+            {
+              "id": "level-uuid-2",
+              "level_number": 3,
+              "title": "Level 3",
+              "unlock_week": 3,
+              "is_unlocked": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+World response fields:
+
+- `id`: subject UUID
+- `name`: subject name
+- `grade`: student grade for this world
+- `world_theme`: world visual/theme label
+- `color_hex`: display color for UI
+- `difficulty`: `easy`, `standard`, `hard`, or `null`
+- `quarters`: ordered array of quarter objects
+
+Quarter fields:
+
+- `id`
+- `quarter_number`: integer `1` to `4`
+- `current_unlock_week`: integer unlock progress for that quarter
+- `is_globally_unlocked`: boolean override
+- `levels`: ordered array of levels
+
+Level fields:
+
+- `id`
+- `level_number`
+- `title`
+- `unlock_week`
+- `is_unlocked`: computed server-side using quarter unlock state
+
+Expected behavior:
+
+- Grade 5 students receive 3 worlds.
+- Grade 6 students receive 3 worlds.
+- Unlock state is already computed by the API, so Unity should use `is_unlocked` directly.
+
+Failure responses:
+
+- `401 Unauthorized` when token is missing or invalid.
+- `403 Forbidden` when token belongs to a non-student user.
+
+### 5. Get Full Student Sync State
+
+`GET /api/v1/student/sync/state`
+
+Headers:
+
+```http
+Authorization: Bearer <student-token>
+Accept: application/json
+```
+
+This endpoint is intended to bootstrap the Unity client in one request.
+
+Success response `200 OK`:
+
+```json
+{
+  "worlds": [
+    {
+      "id": "subject-uuid",
+      "name": "English",
+      "grade": 5,
+      "world_theme": "Language Galaxy",
+      "color_hex": "#3B82F6",
+      "difficulty": "hard",
+      "quarters": []
+    }
+  ],
+  "preferences": {
+    "language": "fil",
+    "master_volume": 60,
+    "bgm_volume": 50,
+    "sfx_volume": 40,
+    "tts_enabled": false,
+    "text_size": "large",
+    "colorblind_mode": true
+  },
+  "difficulties": [
+    {
+      "subject_id": "subject-uuid",
+      "subject_name": "English",
+      "difficulty": "hard",
+      "set_by": "teacher",
+      "updated_at_by_teacher": "2026-04-16T10:00:00.000000Z"
+    }
+  ],
+  "screen_time": {
+    "scope": "global",
+    "school_day_limit_min": 45,
+    "weekend_limit_min": 60,
+    "max_levels_school": 2,
+    "max_levels_weekend": 3,
+    "play_start_school": "15:00:00",
+    "play_end_school": "20:00:00",
+    "play_start_weekend": "08:00:00",
+    "play_end_weekend": "20:00:00"
+  },
+  "badges": [
+    {
+      "badge_id": "badge-uuid",
+      "name": "Fast Learner",
+      "description": "Awarded for quick progress.",
+      "icon": "fast-learner",
+      "trigger_type": "progress",
+      "earned_at": "2026-04-16T10:00:00.000000Z"
+    }
+  ],
+  "grades": [
+    {
+      "subject_id": "subject-uuid",
+      "subject_name": "English",
+      "quarter_number": 1,
+      "written_work": 92.0,
+      "performance_task": 94.0,
+      "quarterly_assessment": 91.0,
+      "final_grade": 92.5,
+      "computed_at": "2026-04-16T10:00:00.000000Z"
+    }
+  ]
+}
+```
+
+Top-level sections:
+
+- `worlds`: same structure as `/api/v1/student/worlds`, but returned inline instead of inside a `data` wrapper
+- `preferences`: one object for the student’s current game/accessibility preferences
+- `difficulties`: per-subject difficulty settings
+- `screen_time`: current effective screen-time settings
+- `badges`: earned badge history
+- `grades`: computed academic records by subject/quarter
+
+#### Preferences fields
+
+- `language`: `en` or `fil`
+- `master_volume`: integer
+- `bgm_volume`: integer
+- `sfx_volume`: integer
+- `tts_enabled`: boolean
+- `text_size`: `small`, `medium`, or `large`
+- `colorblind_mode`: boolean
+
+#### Difficulty fields
+
+- `subject_id`
+- `subject_name`
+- `difficulty`: `easy`, `standard`, `hard`
+- `set_by`: `system_default` or `teacher`
+- `updated_at_by_teacher`: ISO-8601 string or `null`
+
+#### Screen-time fields
+
+- `scope`: currently `global`
+- `school_day_limit_min`
+- `weekend_limit_min`
+- `max_levels_school`
+- `max_levels_weekend`
+- `play_start_school`
+- `play_end_school`
+- `play_start_weekend`
+- `play_end_weekend`
+
+Current fallback defaults used by the API if no setting row exists:
+
+- `school_day_limit_min`: `45`
+- `weekend_limit_min`: `60`
+- `max_levels_school`: `2`
+- `max_levels_weekend`: `3`
+- `play_start_school`: `15:00:00`
+- `play_end_school`: `20:00:00`
+- `play_start_weekend`: `08:00:00`
+- `play_end_weekend`: `20:00:00`
+
+#### Badge fields
+
+- `badge_id`
+- `name`
+- `description`
+- `icon`
+- `trigger_type`
+- `earned_at`: ISO-8601 string
+
+#### Grade fields
+
+- `subject_id`
+- `subject_name`
+- `quarter_number`
+- `written_work`
+- `performance_task`
+- `quarterly_assessment`
+- `final_grade`
+- `computed_at`: ISO-8601 string or `null`
+
+Failure responses:
+
+- `401 Unauthorized` when token is missing or invalid.
+- `403 Forbidden` when token belongs to a non-student user.
+
+### 6. Join Classroom Room
+
+`POST /api/v1/student/join-room`
+
+Headers:
+
+```http
+Authorization: Bearer <student-token>
+Accept: application/json
+```
+
+Request body:
+
+```json
+{
+  "room_code": "ABC123"
+}
+```
+
+Validation rules:
+
+- `room_code`: required, string, exactly 6 characters
+- Room code is case-insensitive (auto-uppercased by the server)
+- After validation passes, the server checks:
+  - A classroom with this room code exists (otherwise `422` with `"No classroom found with this room code."`)
+  - The classroom is active (otherwise `422` with `"This classroom is no longer active."`)
+
+Success response `200 OK`:
+
+```json
+{
+  "message": "Successfully joined the classroom.",
+  "classroom": {
+    "id": "classroom-uuid",
+    "name": "Grade 5 - Section A",
+    "grade": 5,
+    "section": "A",
+    "room_code": "ABC123"
   }
 }
 ```
 
-### Common errors
-
-- `AUTH_REQUIRED` - bearer token missing
-- `AUTH_INVALID_TOKEN` - invalid or expired token
-- `AUTH_TOKEN_REVOKED` - access token has been revoked
-- `CODE_INVALID_OR_EXPIRED` - join code is invalid or expired
-- `HUB_NOT_FOUND` - code points to a missing hub
-- `HUB_ALREADY_MEMBER` - student is already a member of that hub
-- `HUB_STUDENT_ALREADY_IN_HUB` - student already belongs to another hub
-- `STUDENT_NOT_FOUND` - student record not found
-
----
-
-## Current realtime status
-
-There is **no production student realtime API** mounted yet.
-
-- No role-specific websocket routes are implemented in `src/features/*`
-- No SSE routes are mounted in `src/app.ts`
-- A **test-only** websocket endpoint exists at `/ws/test`
-
-### `/ws/test` behavior
-
-- On open:
+Already-in-classroom response `422 Unprocessable Entity`:
 
 ```json
-{ "type": "connected", "message": "NutriMind WS test ready" }
+{
+  "message": "You are already in this classroom."
+}
 ```
 
-- On message: echoes back the payload as a string
+Failure responses:
+
+- `401 Unauthorized` when token is missing or invalid.
+- `403 Forbidden` when token belongs to a non-student user.
+- `404 Not Found` if the room code passed initial validation but the classroom was deleted between validation and controller execution (race condition, unlikely).
+- `422 Unprocessable Entity` for validation errors:
 
 ```json
-{ "type": "echo", "data": "<your-message>" }
+{
+  "message": "No classroom found with this room code.",
+  "errors": {
+    "room_code": [
+      "No classroom found with this room code."
+    ]
+  }
+}
 ```
 
-> Do not treat `/ws/test` as a production Unity contract.
+Unity notes:
 
-## Current gaps for Unity client integration
+- Send the room code exactly as the student types it; the server normalizes to uppercase.
+- On success, update the local student profile with the returned `classroom` data.
+- A student can only belong to one classroom at a time. Joining a new room replaces the previous assignment.
 
-These endpoints are **not implemented yet** in the live server:
+## Enum Reference for Unity
 
-- challenge gameplay APIs
-- progress tracking APIs
-- gamification/rewards APIs
-- adaptive learning APIs exposed directly to the client
-- production websocket or SSE gameplay channels
+### Language
 
-If those features are added later, this file should be updated from source, not from `.planning/`.
+- `en` = English
+- `fil` = Filipino
+
+### Text Size
+
+- `small`
+- `medium`
+- `large`
+
+### Difficulty
+
+- `easy`
+- `standard`
+- `hard`
+
+### Difficulty Source
+
+- `system_default`
+- `teacher`
+
+### Screen Time Scope
+
+- `global`
+- `class`
+- `student`
+
+## Recommended Unity Integration Flow
+
+1. Call `POST /api/v1/auth/login`.
+2. Store the returned bearer token.
+3. If the student has no `classroom_id`, prompt them to join a room via `POST /api/v1/student/join-room`.
+4. Call `GET /api/v1/student/sync/state` on app bootstrap after login.
+5. Use `worlds` to build the content map and unlock UI.
+6. Use `preferences` to initialize language, audio, and accessibility settings.
+7. Use `difficulties`, `badges`, and `grades` to hydrate the local player profile.
+8. Optionally call `GET /api/v1/student/worlds` later when only world data needs refresh.
+9. Call `POST /api/v1/auth/logout` when the user signs out.
+
+## Error Handling Recommendations for Unity
+
+- `401`: token missing, expired, revoked, or malformed. Return to login.
+- `403`: authenticated but not allowed for this endpoint.
+- `422`: validation issue on login request. Show field-level error if needed.
+- `429`: too many login attempts. Retry later and show a rate-limit message.
+
+## Current Verification Status
+
+All tests and quality checks pass as of the latest session:
+
+- `composer test` — **fully green**
+  - Type coverage: **100%**
+  - Unit tests: **237 tests / 1291 assertions** — all passing
+  - Lint: Pint pass, Rector pass, frontend format pass
+  - PHPStan: **0 errors**
+- `composer lint` — clean (no auto-modifications needed)
+
+Endpoint coverage:
+
+- Student login, logout, current user — tested
+- Student worlds, sync state — tested
+- Student join-room — tested
+- Enum values and labels — tested (15 tests)
+- Model relationships and casts — tested (25 tests)
+- EnsurePasswordChanged middleware — tested
