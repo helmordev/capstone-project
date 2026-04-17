@@ -6,6 +6,11 @@ using UnityEngine.Networking;
 
 public class ScreenLoader : MonoBehaviour
 {
+    [Header("Menu Panels (Right Side)")]
+    public GameObject defaultPanel; // The NutriMind Logo
+    public GameObject optionsPanel; // The Settings/Audio
+    public GameObject quitPanel;    // The Yes/No prompt
+
     [Header("UI References")]
     public GameObject mainMenuUI;   
     public GameObject loadingUI;    
@@ -18,6 +23,42 @@ public class ScreenLoader : MonoBehaviour
     
     public string pingURL = "https://clients3.google.com/generate_204";
 
+    void Start()
+    {
+        // Automatically show the NutriMind logo when the scene starts
+        ShowDefaultPanel();
+    }
+
+    public void ShowDefaultPanel()
+    {
+        defaultPanel.SetActive(true);
+        optionsPanel.SetActive(false);
+        quitPanel.SetActive(false);
+    }
+
+    public void ShowOptionsPanel()
+    {
+        defaultPanel.SetActive(false);
+        optionsPanel.SetActive(true);
+        quitPanel.SetActive(false);
+    }
+
+    public void ShowQuitPanel()
+    {
+        defaultPanel.SetActive(false);
+        optionsPanel.SetActive(false);
+        quitPanel.SetActive(true);
+    }
+
+    public void QuitGame()
+    {
+        Debug.Log("Exiting Game...");
+        Debug.Log("Note: 'Application.Quit()' will only work in a built version of the game. In the Unity Editor, this will not close the play mode.");
+        Application.Quit(); // This closes the game when built
+    }
+
+    // --- YOUR EXISTING LOADING LOGIC ---
+
     public void StartGameLoad()
     {
         StartCoroutine(CheckInternetAndLoadAsync());
@@ -25,24 +66,19 @@ public class ScreenLoader : MonoBehaviour
 
     IEnumerator CheckInternetAndLoadAsync()
     {
-        // 1. Hide the Main Menu, Show the Loading Screen, reset the bar
         mainMenuUI.SetActive(false);
         loadingUI.SetActive(true);
         loadingBar.value = 0f;
 
-        // 2. Determine which scene to load by checking the internet
         string targetScene = offlineSceneName; 
 
         if (Application.internetReachability != NetworkReachability.NotReachable)
         {
             UnityWebRequest request = UnityWebRequest.Get(pingURL);
-            
-            // ADDED: Force Unity to stop trying after 3 seconds
             request.timeout = 3; 
             
             yield return request.SendWebRequest();
 
-            // CHANGED: We now only check if the result was a 100% clean success
             if (request.result == UnityWebRequest.Result.Success)
             {
                 targetScene = onlineSceneName;
@@ -58,13 +94,11 @@ public class ScreenLoader : MonoBehaviour
             Debug.Log("Device Wi-Fi/Data is fully disabled. Loading: " + targetScene);
         }
 
-        // 3. Load the target scene asynchronously
         AsyncOperation operation = SceneManager.LoadSceneAsync(targetScene);
         operation.allowSceneActivation = false;
 
         float displayedProgress = 0f;
 
-        // 4. Smooth loading bar logic
         while (!operation.isDone)
         {
             float realProgress = Mathf.Clamp01(operation.progress / 0.9f);
