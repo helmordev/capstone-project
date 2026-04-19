@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class GameplayUIManager : MonoBehaviour
 {
@@ -13,7 +14,6 @@ public class GameplayUIManager : MonoBehaviour
     [Tooltip("Drag the 'Settings_Panel' here")]
     public GameObject settingsPanel;
 
-    // This remembers which quarter the player was looking at
     private int currentQuarterIndex = 0;
 
     void Start()
@@ -38,7 +38,7 @@ public class GameplayUIManager : MonoBehaviour
 
     public void OpenSettings()
     {
-        quarterNavPanel.SetActive(false); // Hide the left buttons
+        quarterNavPanel.SetActive(false);
 
         // Hide all the right-side quarter panels
         for (int i = 0; i < quarterPanels.Length; i++)
@@ -49,13 +49,13 @@ public class GameplayUIManager : MonoBehaviour
             }
         }
 
-        settingsPanel.SetActive(true); // Show the settings panel
+        settingsPanel.SetActive(true);
     }
 
     public void CloseSettings()
     {
-        settingsPanel.SetActive(false);   // Hide settings
-        quarterNavPanel.SetActive(true);  // Show left buttons again
+        settingsPanel.SetActive(false);
+        quarterNavPanel.SetActive(true);
 
         // Restore the quarter panel they were looking at before opening settings
         ShowQuarter(currentQuarterIndex);
@@ -65,5 +65,11 @@ public class GameplayUIManager : MonoBehaviour
     {
         Debug.Log("Exiting Game...");
         Application.Quit(); 
+    }
+
+    public void LoadLevel(string levelSceneName)
+    {
+        Debug.Log("Loading level: " + levelSceneName);
+        SceneManager.LoadScene(levelSceneName);
     }
 }
